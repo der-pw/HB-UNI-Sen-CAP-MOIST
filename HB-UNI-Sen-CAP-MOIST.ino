@@ -4,6 +4,7 @@
 // 2019-05-03 jp112sdl Creative Commons - http://creativecommons.org/licenses/by-nc-sa/3.0/de/
 // 2019-05-04 stan23 Creative Commons - http://creativecommons.org/licenses/by-nc-sa/3.0/de/
 //- -----------------------------------------------------------------------------------------------------------------------
+// ci-test=yes board=328p aes=no
 
 //Sensor:
 //https://www.dfrobot.com/wiki/index.php/Capacitive_Soil_Moisture_Sensor_SKU:SEN0193
@@ -178,7 +179,7 @@ class WeatherEventMsg : public Message {
 #define PAYLOAD_OFFSET 2
 #endif
 
-    Message::init(0xc + PAYLOAD_OFFSET + (DEVICE_CHANNEL_COUNT * 2), msgcnt, 0x53, (msgcnt % 20 == 1) ? BIDI : BCAST, batlow ? 0x80 : 0x00, 0x41);
+    Message::init(0xc + PAYLOAD_OFFSET + (DEVICE_CHANNEL_COUNT * 2), msgcnt, 0x53, (msgcnt % 20 == 1) ? (BIDI | WKMEUP) : BCAST, batlow ? 0x80 : 0x00, 0x41);
 
 #ifndef NO_DS18B20
     pload[0] = (t >> 8) & 0xff;
@@ -230,8 +231,8 @@ public:
 
        public:
          uint8_t       humidity[DEVICE_CHANNEL_COUNT];
-         uint8_t       sensorcount;
-         SensorArray (UType& d) : Alarm(0), dev(d), sensorcount(0) {}
+         SensorArray (UType& d) : Alarm(0), dev(d) {}
+         virtual ~SensorArray () {}
 
          void measure() {
            //enable all moisture sensors
@@ -253,11 +254,24 @@ public:
              }
              sens_val /= 8;
 
-             DPRINT(F("+Analog     (#")); DDEC(s + 1); DPRINT(F("): ")); DDECLN(sens_val);
-             uint16_t range = dev.channel(s + 2).getList1().HIGHValue() - dev.channel(s + 2).getList1().LOWValue();
-             uint32_t base = sens_val - dev.channel(s + 2).getList1().LOWValue();
-             uint8_t pct_inv = (100 * base) / range;
-             humidity[s] = (pct_inv > 100) ? 0 : 100 - pct_inv;
+             DPRINT(F("+Analog     (#")); DDEC(s + 1); DPRINT(F("): ")); DDEC(sens_val);
+             uint16_t upper_limit = dev.channel(s + 2).getList1().HIGHValue();
+             uint16_t lower_limit = dev.channel(s + 2).getList1().LOWValue();
+             if (sens_val > upper_limit) {
+               humidity[s] = 0;
+               DPRINTLN(F(" higher than limit!"));
+             }
+             else if (sens_val < lower_limit) {
+               humidity[s] = 100;
+               DPRINTLN(F(" lower than limit!"));
+             }
+             else {
+               uint16_t range = upper_limit - lower_limit;
+               uint32_t base = sens_val - lower_limit;
+               uint8_t pct_inv = (base * 100) / range;
+               humidity[s] = 100 - pct_inv;
+               DPRINTLN("");
+             }
 
              //humidity[s] = random(0,100);
 
@@ -340,6 +354,8 @@ void loop() {
 
   if ( worked == false && poll == false ) {
     if ( hal.battery.critical() ) {
+      DPRINT(F("Battery critical! "));DDECLN(hal.battery.current());
+      Serial.flush();
       hal.activity.sleepForever(hal);
     }
     hal.activity.savePower<Sleep<>>(hal);
